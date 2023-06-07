@@ -53,6 +53,16 @@ def save_image(image_array):
     # Save the image to a file
     image.save("scenes/Spheres.png")
 
+def normalize(vector):
+    magnitude = np.linalg.norm(vector)
+    if magnitude == 0:
+        return vector
+    return vector / magnitude
+def construct_ray_through_pixel(camera, i, j):
+    P_0 = camera.position
+    V_towards = normalize(np.array(camera.look_at) - np.array(P_0))
+    P_c = P_0 + camera.screen_distance * V_towards
+
 
 def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
@@ -66,6 +76,12 @@ def main():
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
     # TODO: Implement the ray tracer
+    image_height = args.width
+    image_width = args.height
+    for i in range(image_width):
+        for j in range(image_height):
+            ray = construct_ray_through_pixel(camera, i, j)
+
 
     # Dummy result
     image_array = np.zeros((500, 500, 3))

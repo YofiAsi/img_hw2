@@ -11,6 +11,14 @@ from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
 
 
+class Ray:
+    def __int__(self, origin, direction):
+        self.origin = origin
+        self.direction = direction
+
+    def point_at_parameter(self, t):
+        return self.origin + t * self.direction
+
 def parse_scene_file(file_path):
     objects = []
     camera = None
@@ -53,15 +61,37 @@ def save_image(image_array):
     # Save the image to a file
     image.save("scenes/Spheres.png")
 
+
+def calculate_orthogonal_vector(vector):
+    # Create a random vector with the same dimension
+    random_vector = np.random.rand(len(vector))
+
+    # Subtract the projection of the random vector onto the given vector
+    orthogonal_vector = random_vector - np.dot(random_vector, vector) / np.dot(vector, vector) * vector
+
+    return orthogonal_vector
+
 def normalize(vector):
     magnitude = np.linalg.norm(vector)
     if magnitude == 0:
         return vector
     return vector / magnitude
-def construct_ray_through_pixel(camera, i, j):
+def construct_ray_through_pixel(camera, i, j, image_resolution_width, image_resolution_height):
     P_0 = camera.position
-    V_towards = normalize(np.array(camera.look_at) - np.array(P_0))
-    P_c = P_0 + camera.screen_distance * V_towards
+    towards_vector = normalize(np.array(camera.look_at) - np.array(P_0))
+    P_center = P_0 + camera.screen_distance * towards_vector
+    up_vector = normalize(calculate_orthogonal_vector(towards_vector))
+
+    right_vector = normalize(np.cross(towards_vector, up_vector))
+    up_vector = normalize(np.cross(right_vector, towards_vector))
+    R = camera.screen_width / image_resolution_width
+
+    P = P_center + (j - np.floor(image_resolution_width/2)) * R * right_vector - \
+        (i - np.floor(image_resolution_height/2) * R * up_vector)
+
+
+    return P
+
 
 
 def main():
@@ -76,11 +106,15 @@ def main():
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
     # TODO: Implement the ray tracer
+
+    # image resolution
     image_height = args.width
     image_width = args.height
+
     for i in range(image_width):
         for j in range(image_height):
-            ray = construct_ray_through_pixel(camera, i, j)
+            ray = construct_ray_through_pixel(camera, i, j, image_width, image_height)
+
 
 
     # Dummy result

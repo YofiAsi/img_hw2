@@ -1,7 +1,7 @@
 import argparse
 from PIL import Image
 import numpy as np
-
+from numpy import ndarray
 from camera import Camera
 from light import Light
 from material import Material
@@ -9,15 +9,19 @@ from scene_settings import SceneSettings
 from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
-
+import numpy as np
+from numpy.linalg import norm
 
 class Ray:
-    def __int__(self, origin, direction):
+    def __int__(self, origin: ndarray, direction: ndarray, origin_object=None, relfective_depth=0):
+        assert len(origin) == 3 and len(direction) == 3
         self.origin = origin
         self.direction = direction
-
-    def point_at_parameter(self, t):
-        return self.origin + t * self.direction
+        self.color = np.array([0, 0, 0])
+        self.transparency_ray:  Ray = None
+        self.reflection_ray:    Ray = None
+        self.origin_object = None
+        self.reflective_depth = 0
 
 def parse_scene_file(file_path):
     objects = []
@@ -54,44 +58,62 @@ def parse_scene_file(file_path):
                 raise ValueError("Unknown object type: {}".format(obj_type))
     return camera, scene_settings, objects
 
-
-def save_image(image_array):
+def save_image(image_array, file_path):
     image = Image.fromarray(np.uint8(image_array))
 
     # Save the image to a file
-    image.save("scenes/Spheres.png")
-
-
-def calculate_orthogonal_vector(vector):
-    # Create a random vector with the same dimension
-    random_vector = np.random.rand(len(vector))
-
-    # Subtract the projection of the random vector onto the given vector
-    orthogonal_vector = random_vector - np.dot(random_vector, vector) / np.dot(vector, vector) * vector
-
-    return orthogonal_vector
+    image.save(file_path)
 
 def normalize(vector):
     magnitude = np.linalg.norm(vector)
     if magnitude == 0:
         return vector
     return vector / magnitude
-def construct_ray_through_pixel(camera, i, j, image_resolution_width, image_resolution_height):
+
+def set_camera_orientation(camera: Camera):
     P_0 = camera.position
     towards_vector = normalize(np.array(camera.look_at) - np.array(P_0))
-    P_center = P_0 + camera.screen_distance * towards_vector
-    up_vector = normalize(calculate_orthogonal_vector(towards_vector))
-
-    right_vector = normalize(np.cross(towards_vector, up_vector))
+    right_vector = normalize(np.cross(towards_vector, camera.up_vector))
     up_vector = normalize(np.cross(right_vector, towards_vector))
-    R = camera.screen_width / image_resolution_width
 
-    P = P_center + (j - np.floor(image_resolution_width/2)) * R * right_vector - \
-        (i - np.floor(image_resolution_height/2) * R * up_vector)
+    camera.right_vector = right_vector
+    camera.up_vector = up_vector
+    camera.towards_vector = towards_vector
 
+def construct_ray_grid(camera: Camera, image_width: int, image_height: int):
+    ray_grid = np.empty((image_height, image_width), dtype=np.object)
 
-    return P
+    # Calculate the position of each pixel on the 3D world
+    P_center = camera.position + camera.screen_distance * camera.towards_vector
+    R = camera.screen_width / image_width
 
+    j_coords = np.arange(image_width) - np.floor(image_width/2)
+    i_coords = np.arange(image_height) - np.floor(image_height/2)
+
+    P = P_center + R * j_coords[:, np.newaxis] * camera.right_vector - R * i_coords[np.newaxis, :] * camera.up_vector
+    directions = normalize(P - camera.position)
+
+    ray_origins = np.full((image_height, image_width), camera.position)
+    ray_grid[:, :] = np.vectorize(Ray)(ray_origins, directions)
+
+    return ray_grid
+
+def find_nearest_intersection(ray_grid: ndarray, scene_objects):
+    intersections = np.empty_like(ray_grid, dtype=np.object)
+    object_hits = np.empty_like(ray_grid, dtype=np.object)
+    t_min = np.full(ray_grid.shape, float('inf'))
+
+    for obj in scene_objects:
+        hit_points = obj.intersect(ray_grid)
+        valid_hits = hit_points != None
+        t_values = np.linalg.norm(hit_points - ray_grid.origin[..., None, None], axis=-1)
+
+        update_mask = np.logical_and(valid_hits, t_values < t_min)
+        t_min[update_mask] = t_values[update_mask]
+        intersections[update_mask] = hit_points[update_mask]
+        object_hits[update_mask] = obj
+
+    return intersections, object_hits
 
 
 def main():
@@ -105,23 +127,17 @@ def main():
     # Parse the scene file
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
-    # TODO: Implement the ray tracer
+    # Get the camera orientation
+    set_camera_orientation(camera)
 
-    # image resolution
-    image_height = args.width
-    image_width = args.height
-
-    for i in range(image_width):
-        for j in range(image_height):
-            ray = construct_ray_through_pixel(camera, i, j, image_width, image_height)
+    # Construct the ray grid and reshape it to a 1D array
+    ray_grid_2d = construct_ray_grid(camera, args.width, args.height)
+    ray_grid = ray_grid_2d.reshape(-1)
 
 
-
-    # Dummy result
-    image_array = np.zeros((500, 500, 3))
 
     # Save the output image
-    save_image(image_array)
+    save_image(ray_grid_2d.color, args.output_image)
 
 
 if __name__ == '__main__':

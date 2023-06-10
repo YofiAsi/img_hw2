@@ -3,5 +3,5 @@ class Material:
         self.diffuse_color = diffuse_color
         self.specular_color = specular_color
         self.reflection_color = reflection_color
-        self.shininess = shininess
+        self.shininess = shininess #n , phong
         self.transparency = transparency

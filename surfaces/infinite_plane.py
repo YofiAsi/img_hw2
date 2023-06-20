@@ -6,10 +6,7 @@ class InfinitePlane:
         self.offset = offset
         self.material_index = material_index
 
-    def intersect(self, rays):
-        origins = rays.origin
-        directions = rays.direction
-
+    def intersect(self, origins, directions):
         denom = np.sum(self.normal * directions, axis=1)
         t = -(np.sum(self.normal * origins, axis=1) + self.offset) / denom
 
@@ -21,31 +18,25 @@ class InfinitePlane:
 
         return hit_points
     
-    def refract(self, direction, intersection_point, refractive_index_ratio=1.5):
-        cos_theta_i = -np.dot(direction, self.normal)
+    def refract(self, directions, intersection_points, refractive_index_ratio=1.5):
+        cos_theta_i = -np.sum(directions * self.normal, axis=1)
 
-        if cos_theta_i > 0:
-            # Ray is exiting the plane, flip the normal and invert the refractive index ratio
-            surface_normal = -self.normal
-            refractive_index_ratio = 1 / refractive_index_ratio
-        else:
-            # Ray is entering the plane, use the normal as is
-            surface_normal = self.normal
+        mask = cos_theta_i > 0
+        surface_normal = np.where(mask[:, np.newaxis], -self.normal, self.normal)
+        refractive_index_ratio = np.where(mask, 1 / refractive_index_ratio, refractive_index_ratio)
 
         cos_theta_t = np.sqrt(1 - refractive_index_ratio**2 * (1 - cos_theta_i**2))
+        cos_theta_t = np.where(np.isnan(cos_theta_t), 0, cos_theta_t)
 
-        if np.isnan(cos_theta_t):
-            # Total internal reflection
-            return None
+        refracted_directions = refractive_index_ratio[:, np.newaxis] * directions + \
+            (refractive_index_ratio[:, np.newaxis] * cos_theta_i[:, np.newaxis] - cos_theta_t[:, np.newaxis]) * surface_normal
 
-        refracted_direction = refractive_index_ratio * direction + (refractive_index_ratio * cos_theta_i - cos_theta_t) * surface_normal
+        return refracted_directions
 
-        return refracted_direction
-
-    def reflect(self, direction):
-        incident_direction = -direction
+    def reflect(self, directions):
+        incident_directions = -directions
         surface_normal = self.normal
 
-        reflected_direction = incident_direction - 2 * np.dot(incident_direction, surface_normal) * surface_normal
+        reflected_directions = incident_directions - 2 * np.sum(incident_directions * surface_normal, axis=1)[:, np.newaxis] * surface_normal
 
-        return reflected_direction
+        return reflected_directions

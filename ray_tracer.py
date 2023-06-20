@@ -13,6 +13,74 @@ from surfaces.sphere import Sphere
 
 EPSILON = 1e-6
 
+class RayArray:
+    def __init__(self, origins: ndarray, directions: ndarray, reflective_depth = None):
+        assert origins.shape == directions.shape
+        self.origins = np.copy(origins)
+        self.directions = np.copy(directions)
+        self.colors = np.zeros_like(origins)
+        self.reflective_depth = reflective_depth
+        self.object_hits = None
+        self.hit_points = None
+        self.reflections = None
+        self.transparencies = None
+
+    def get_next_ray_array(self, material_list: list, object_list: list):
+        valid_indices = np.logical_and(self.hit_points != None, self.object_hits != None)
+        valid_origins = self.origins[valid_indices]
+        valid_directions = self.directions[valid_indices]
+
+        valid_intersections = self.hit_points[valid_indices]
+        valid_object_hits = self.object_hits[valid_indices]
+
+        # Extract object materials based on material index from valid object hits
+        object_materials = np.take(material_list, [obj_hit.material_index for obj_hit in valid_object_hits])
+
+        # Calculate reflection colors and filter reflection mask
+        reflection_colors = np.vectorize(lambda x: x.reflection_color)(object_materials)
+        reflection_mask = np.any(reflection_colors != [0, 0, 0], axis=1)
+
+        # Calculate reflection directions, origins, and create reflection rays
+        reflection_directions = np.array([obj_hit.reflect(ray.direction, intersection) for ray, obj_hit, intersection in zip(valid_rays, valid_object_hits, valid_intersections)])
+        reflection_origins = valid_intersections + reflection_directions * EPSILON
+        reflection_rays = Ray(reflection_origins, reflection_directions)
+        reflection_rays.color = reflection_colors.reshape(-1)
+        reflection_rays.origin_object = valid_object_hits
+        reflection_rays.reflective_depth = valid_rays.reflective_depth + 1
+
+        # Check transparency mask
+        transparency_mask = object_materials[:, 0] != 0
+
+        # Calculate transparency directions, origins, and create transparency rays
+        transparency_directions = np.array([obj_hit.refract(ray.direction, obj_hit.normal, obj_mat.refraction_index) for ray, obj_hit, obj_mat in zip(valid_rays, valid_object_hits, object_materials)])
+        transparency_origins = valid_intersections + transparency_directions * EPSILON
+        transparency_rays = Ray(transparency_origins, transparency_directions)
+        transparency_rays.color = valid_rays.color
+        transparency_rays.origin_object = valid_object_hits
+
+        # Extend new rays with valid reflection rays
+        if np.any(reflection_mask):
+            new_rays.extend(reflection_rays[reflection_mask])
+
+        # Extend new rays with valid transparency rays
+        if np.any(transparency_mask):
+            new_rays.extend(transparency_rays[transparency_mask])
+
+        new_ray_array = np.array(new_rays, dtype=np.object)  # Convert the list of new rays to an array
+
+        return new_ray_array
+
+    def get_colors(self, objects_list: list, material_list: list, scene_settings: SceneSettings):
+        valid_indices = np.logical_and(self.hit_points != None, self.object_hits != None)
+        backgournd_indices = np.logical_not(valid_indices)
+        self.colors[backgournd_indices] = scene_settings.background_color
+
+        for object in objects_list:
+            object_indices = self.object_hits == object
+            material_idx = object.material_index
+            material: Material = material_list[material_idx]
+            self.colors[object_indices] = material.diffuse_color
+
 class Ray:
     def __int__(self, origin: ndarray, direction: ndarray, origin_object=None, relfective_depth=0):
         assert len(origin) == 3 and len(direction) == 3
@@ -85,7 +153,6 @@ def construct_ray_grid(camera: Camera, image_width: int, image_height: int):
     """
     This is the first step. We construct a grid of rays, one for each pixel in the image.
     """
-    ray_grid = np.empty((image_height, image_width), dtype=np.object)
 
     # Calculate the position of each pixel on the 3D world
     P_center = camera.position + camera.screen_distance * camera.towards_vector
@@ -94,11 +161,11 @@ def construct_ray_grid(camera: Camera, image_width: int, image_height: int):
     j_coords = np.arange(image_width) - np.floor(image_width/2)
     i_coords = np.arange(image_height) - np.floor(image_height/2)
 
-    P = P_center + R * j_coords[:, np.newaxis] * camera.right_vector - R * i_coords[np.newaxis, :] * camera.up_vector
+    P = np.zeros(shape=(image_height, image_width, 3))
+    P = P + P_center + R * j_coords[:, np.newaxis] * camera.right_vector.reshape(1, -1) - R * i_coords.reshape(-1, 1) * camera.up_vector.reshape(1, -1, 1)
     directions = normalize(P - camera.position)
 
-    ray_origins = np.full((image_height, image_width), camera.position)
-    ray_grid[:, :] = np.vectorize(Ray)(ray_origins, directions)
+    ray_grid = RayArray(ray_origins.reshape(-1), directions.reshape(-1))
 
     return ray_grid
 
@@ -118,20 +185,6 @@ def find_nearest_intersection(ray_grid: ndarray, scene_objects):
         object_hits[update_mask] = obj
 
     return intersections, object_hits
-
-def refract(incident_direction, surface_normal, refractive_index_ratio):
-    cos_theta_i = -np.dot(incident_direction, surface_normal)
-    sin2_theta_i = 1 - cos_theta_i**2
-
-    if sin2_theta_i > 1:
-        # Total internal reflection
-        return None
-
-    cos_theta_t = np.sqrt(1 - refractive_index_ratio**2 * sin2_theta_i)
-    refracted_direction = refractive_index_ratio * incident_direction + (refractive_index_ratio * cos_theta_i - cos_theta_t) * surface_normal
-
-    return refracted_direction
-
 
 def construct_next_ray_grid(curr_ray_array: ndarray, intersections: ndarray, object_hits: ndarray, material_list: list) -> ndarray:
     new_rays = []  # List to store the new rays
@@ -162,7 +215,7 @@ def construct_next_ray_grid(curr_ray_array: ndarray, intersections: ndarray, obj
     transparency_mask = object_materials[:, 0] != 0
 
     # Calculate transparency directions, origins, and create transparency rays
-    transparency_directions = np.array([refract(ray.direction, obj_hit.normal, obj_mat.refraction_index) for ray, obj_hit, obj_mat in zip(valid_rays, valid_object_hits, object_materials)])
+    transparency_directions = np.array([obj_hit.refract(ray.direction, obj_hit.normal, obj_mat.refraction_index) for ray, obj_hit, obj_mat in zip(valid_rays, valid_object_hits, object_materials)])
     transparency_origins = valid_intersections + transparency_directions * EPSILON
     transparency_rays = Ray(transparency_origins, transparency_directions)
     transparency_rays.color = valid_rays.color
@@ -182,14 +235,15 @@ def construct_next_ray_grid(curr_ray_array: ndarray, intersections: ndarray, obj
 
 
 
-
-def ray_trace(ray_array: ndarray, objects: list, material_list: list, light_list: list, scene_settings: SceneSettings):
+def ray_trace(ray_array: RayArray, objects: list, material_list: list, light_list: list, scene_settings: SceneSettings):
     BG_COLOR = scene_settings.background_color
     MAX_SHADOW_RAYS = scene_settings.root_number_shadow_rays
     MAX_DEPTH = scene_settings.max_recursions
 
     rays_stack = [ray_array]
     intersections, object_hits = find_nearest_intersection(ray_array, objects)
+
+    ray_array.get_colors(material_list=material_list, objects_list=objects, scene_settings=scene_settings)
 
 def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
@@ -210,13 +264,14 @@ def main():
     object_list = [obj for obj in objects if not isinstance(obj, Light) and not isinstance(obj, Material)]
 
     # Construct the ray grid and reshape it to a 1D array
-    ray_grid_2d = construct_ray_grid(camera, args.width, args.height)
-    ray_array = ray_grid_2d.reshape(-1)
+    first_ray_array = construct_ray_grid(camera, args.width, args.height)
 
-    ray_trace(ray_array, camera, object_list, material_list, light_list, scene_settings)
+    ray_trace(first_ray_array, camera, object_list, material_list, light_list, scene_settings)
+    
+    colors = first_ray_array.colors.reshape((args.width, args.height, 3))
 
     # Save the output image
-    save_image(ray_grid_2d.color, args.output_image)
+    save_image(colors, args.output_image)
 
 
 if __name__ == '__main__':

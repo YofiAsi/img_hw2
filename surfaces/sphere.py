@@ -6,10 +6,7 @@ class Sphere:
         self.radius = radius
         self.material_index = material_index
 
-    def intersect(self, rays):
-        origins = rays.origin
-        directions = rays.direction
-
+    def intersect(self, origins, directions):
         oc = origins - self.position
         a = np.sum(directions * directions, axis=1)
         b = 2 * np.sum(oc * directions, axis=1)
@@ -30,33 +27,27 @@ class Sphere:
 
         return hit_points
 
-    def refract(self, direction, intersection_point, refractive_index_ratio=1.5):
-        surface_normal = (intersection_point - self.position) / self.radius
+    def refract(self, directions, intersection_points, refractive_index_ratio=1.5):
+        surface_normals = (intersection_points - self.position) / self.radius
 
-        cos_theta_i = -np.dot(direction, surface_normal)
+        cos_theta_i = -np.sum(directions * surface_normals, axis=1)
 
-        if cos_theta_i > 0:
-            # Ray is exiting the sphere, flip the surface normal and invert the refractive index ratio
-            surface_normal = -surface_normal
-            refractive_index_ratio = 1 / refractive_index_ratio
-        else:
-            # Ray is entering the sphere, use the surface normal as is
-            surface_normal = surface_normal
+        mask = cos_theta_i > 0
+        surface_normals = np.where(mask[:, np.newaxis], -surface_normals, surface_normals)
+        refractive_index_ratio = np.where(mask, 1 / refractive_index_ratio, refractive_index_ratio)
 
         cos_theta_t = np.sqrt(1 - refractive_index_ratio**2 * (1 - cos_theta_i**2))
+        cos_theta_t = np.where(np.isnan(cos_theta_t), 0, cos_theta_t)
 
-        if np.isnan(cos_theta_t):
-            # Total internal reflection
-            return None
+        refracted_directions = refractive_index_ratio[:, np.newaxis] * directions + \
+            (refractive_index_ratio[:, np.newaxis] * cos_theta_i[:, np.newaxis] - cos_theta_t[:, np.newaxis]) * surface_normals
 
-        refracted_direction = refractive_index_ratio * direction + (refractive_index_ratio * cos_theta_i - cos_theta_t) * surface_normal
+        return refracted_directions
 
-        return refracted_direction
+    def reflect(self, directions, intersection_points):
+        incident_directions = -directions
+        surface_normals = (intersection_points - self.position) / self.radius
 
-    def reflect(self, direction, intersection_point):
-        incident_direction = -direction
-        surface_normal = (intersection_point - self.position) / self.radius
+        reflected_directions = incident_directions - 2 * np.sum(incident_directions * surface_normals, axis=1)[:, np.newaxis] * surface_normals
 
-        reflected_direction = incident_direction - 2 * np.dot(incident_direction, surface_normal) * surface_normal
-
-        return reflected_direction
+        return reflected_directions

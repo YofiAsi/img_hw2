@@ -6,72 +6,37 @@ class Cube:
         self.scale = scale
         self.material_index = material_index
 
-    def intersect(self, rays):
-        origins = rays.origin
-        directions = rays.direction
+    def intersect(self, ray):
+        t_min = float('-inf')
+        t_max = float('inf')
 
-        inv_directions = 1.0 / directions
-        sign = np.where(inv_directions >= 0, 1, -1)
+        for i in range(3):
+            t1 = (self.position[i] - self.scale[i] - ray.origin[i]) / ray.direction[i]
+            t2 = (self.position[i] + self.scale[i] - ray.origin[i]) / ray.direction[i]
+            t_min = max(t_min, min(t1, t2))
+            t_max = min(t_max, max(t1, t2))
 
-        tmin = (self.position - origins) * inv_directions
-        tmax = (self.position + self.scale - origins) * inv_directions
+        if t_max >= max(0, t_min):
+            t = max(0, t_min)
+            hit_point = ray.origin + t * ray.direction
+            return hit_point
 
-        tmin, tmax = np.minimum(tmin, tmax), np.maximum(tmin, tmax)
-        tmin = np.max(tmin, axis=1)
-        tmax = np.min(tmax, axis=1)
+        return -1
 
-        tmin = np.maximum(tmin, 0)
-
-        mask = tmin <= tmax
-        hit_points = np.where(mask[:, np.newaxis], origins + tmin[:, np.newaxis] * directions, None)
-
-        return hit_points
-
-    def refract(self, ray_direction, intersection_point, refractive_index_ratio=1.5):
-        # Compute the refracted direction based on the Snell's law
-        # ray_direction: The incident direction of the ray
-        # intersection_point: The point of intersection on the cube's surface
-        # refractive_index_ratio: The ratio of refractive indices (n1/n2)
-
-        normal = self._get_surface_normal(intersection_point)
-        cos_theta_i = np.dot(-ray_direction, normal)
-        sin_theta_i = np.sqrt(1 - cos_theta_i**2)
-        sin_theta_t = sin_theta_i / refractive_index_ratio
-        cos_theta_t = np.sqrt(1 - sin_theta_t**2)
-
-        refracted_direction = refractive_index_ratio * ray_direction + \
-            (refractive_index_ratio * cos_theta_i - cos_theta_t) * normal
-
-        return refracted_direction
-
-    def reflect(self, ray_direction, intersection_point):
-        # Compute the reflected direction based on the surface normal
-        # ray_direction: The incident direction of the ray
-        # intersection_point: The point of intersection on the cube's surface
-
-        normal = self._get_surface_normal(intersection_point)
-        reflected_direction = ray_direction - 2 * np.dot(ray_direction, normal) * normal
-
+    def reflect(self, ray, hit_point):
+        normal = self.calculate_normal(hit_point)
+        reflected_direction = ray.direction - 2 * np.dot(ray.direction, normal) * normal
         return reflected_direction
 
-    def _get_surface_normal(self, point):
-        # Compute the surface normal at the given point on the cube's surface
-        # point: The point on the cube's surface
+    def refract(self, ray, hit_point, refractive_index):
+        # Cube does not refract light, so return the same direction
+        return ray.direction
 
-        # Check which face of the cube the point lies on
-        min_dist = np.min(np.abs(point - self.position - self.scale / 2))
-        epsilon = 1e-6  # Small value to handle floating-point errors
-
-        if np.abs(min_dist - (self.scale / 2)) < epsilon:
-            # Point lies on one of the faces
-            normal = np.zeros_like(point)
-
-            for i in range(3):
-                if np.abs(point[i] - (self.position[i] + self.scale[i] / 2)) < epsilon:
-                    normal[i] = 1 if point[i] > self.position[i] else -1
-                    break
-
-            return normal
-
-        # Point does not lie on any face, so return the cube's default normal
-        return np.array([0, 0, 0])
+    def calculate_normal(self, point):
+        normal = np.zeros(3)
+        for i in range(3):
+            if abs(point[i] - self.position[i] - self.scale[i]) < 1e-6:
+                normal[i] = 1
+            elif abs(point[i] - self.position[i] + self.scale[i]) < 1e-6:
+                normal[i] = -1
+        return normal

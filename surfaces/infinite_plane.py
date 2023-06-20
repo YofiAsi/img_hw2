@@ -6,46 +6,16 @@ class InfinitePlane:
         self.offset = offset
         self.material_index = material_index
 
-    def intersect(self, rays):
-        origins = rays.origin
-        directions = rays.direction
+    def intersect(self, ray):
+        dot_product = np.dot(ray.direction, self.normal)
+        if dot_product == 0:
+            return -1
+        return (-1 * (np.dot(ray.origin, self.normal) - self.offset)) / dot_product
 
-        denom = np.sum(self.normal * directions, axis=1)
-        t = -(np.sum(self.normal * origins, axis=1) + self.offset) / denom
-
-        mask = denom != 0
-        t = np.where(mask, t, np.inf)
-        t = np.maximum(t, 0)
-
-        hit_points = np.where(mask[:, np.newaxis], origins + t[:, np.newaxis] * directions, None)
-
-        return hit_points
-    
-    def refract(self, direction, intersection_point, refractive_index_ratio=1.5):
-        cos_theta_i = -np.dot(direction, self.normal)
-
-        if cos_theta_i > 0:
-            # Ray is exiting the plane, flip the normal and invert the refractive index ratio
-            surface_normal = -self.normal
-            refractive_index_ratio = 1 / refractive_index_ratio
-        else:
-            # Ray is entering the plane, use the normal as is
-            surface_normal = self.normal
-
-        cos_theta_t = np.sqrt(1 - refractive_index_ratio**2 * (1 - cos_theta_i**2))
-
-        if np.isnan(cos_theta_t):
-            # Total internal reflection
-            return None
-
-        refracted_direction = refractive_index_ratio * direction + (refractive_index_ratio * cos_theta_i - cos_theta_t) * surface_normal
-
-        return refracted_direction
-
-    def reflect(self, direction):
-        incident_direction = -direction
-        surface_normal = self.normal
-
-        reflected_direction = incident_direction - 2 * np.dot(incident_direction, surface_normal) * surface_normal
-
+    def reflect(self, ray, hit_point):
+        reflected_direction = ray.direction - 2 * np.dot(ray.direction, self.normal) * self.normal
         return reflected_direction
+
+    def refract(self, ray, hit_point, refractive_index):
+        # Infinite plane does not refract light, so return the same direction
+        return ray.direction

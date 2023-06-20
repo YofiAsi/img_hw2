@@ -10,19 +10,9 @@ from scene_settings import SceneSettings
 from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
+from tqdm import tqdm
 
 EPSILON = 1e-6
-
-class Ray:
-    def __int__(self, origin: ndarray, direction: ndarray, origin_object=None, relfective_depth=0):
-        assert len(origin) == 3 and len(direction) == 3
-        self.origin = origin
-        self.direction = direction
-        self.color = np.array([0, 0, 0])
-        self.transparency_ray:  Ray = None
-        self.reflection_ray:    Ray = None
-        self.origin_object = None
-        self.reflective_depth = 0
 
 def parse_scene_file(file_path):
     objects = []
@@ -61,63 +51,75 @@ def parse_scene_file(file_path):
 
 def save_image(image_array, file_path):
     image = Image.fromarray(np.uint8(image_array))
-
+    
     # Save the image to a file
     image.save(file_path)
 
-def normalize(vector):
-    magnitude = np.linalg.norm(vector)
-    if magnitude == 0:
-        return vector
-    return vector / magnitude
+class Ray:
+    def __init__(self, origin: ndarray, direction: ndarray, origin_object=None, relfective_depth=0):
+        assert len(origin) == 3 and len(direction) == 3
+        self.origin = origin
+        self.direction = direction
+        self.color = np.array([0, 0, 0])
+        self.transparency_ray:  Ray = None
+        self.reflection_ray:    Ray = None
+        self.intersected_object = None
+        self.intersecting_point = None
+        self.reflective_depth = 0
 
+class Vector:
+    def __init__(self, direction):
+        """
+        create a normalized vector
+        """
+        magnitude = np.linalg.norm(direction)
+        if (direction == 0).all():
+            self.direction = direction
+        else:
+            self.direction = direction / magnitude
+
+    def get_perpendicular_vector(self):
+        vector = np.cross(self.direction, np.array([1, 0, 0]))
+        if (vector == 0).all():
+            vector = np.cross(self.direction, np.array([0, 1, 0]))
+        vector /= np.linalg.norm(vector)
+        return vector
+    
 def set_camera_orientation(camera: Camera):
     P_0 = camera.position
-    towards_vector = normalize(np.array(camera.look_at) - np.array(P_0))
-    right_vector = normalize(np.cross(towards_vector, camera.up_vector))
-    up_vector = normalize(np.cross(right_vector, towards_vector))
+    towards_vector = Vector(np.array(camera.look_at) - np.array(P_0))
+    right_vector = Vector(np.cross(towards_vector.direction, camera.up_vector))
+    up_vector = Vector(np.cross(right_vector.direction, towards_vector.direction))
 
-    camera.right_vector = right_vector
-    camera.up_vector = up_vector
-    camera.towards_vector = towards_vector
+    camera.right_vector = right_vector.direction
+    camera.up_vector = up_vector.direction
+    camera.towards_vector = towards_vector.direction
 
 def construct_ray_grid(camera: Camera, image_width: int, image_height: int):
     """
     This is the first step. We construct a grid of rays, one for each pixel in the image.
     """
-    ray_grid = np.empty((image_height, image_width), dtype=np.object)
 
     # Calculate the position of each pixel on the 3D world
     P_center = camera.position + camera.screen_distance * camera.towards_vector
     R = camera.screen_width / image_width
 
-    j_coords = np.arange(image_width) - np.floor(image_width/2)
-    i_coords = np.arange(image_height) - np.floor(image_height/2)
+    P = np.zeros((image_height, image_width, 3))
 
-    P = P_center + R * j_coords[:, np.newaxis] * camera.right_vector - R * i_coords[np.newaxis, :] * camera.up_vector
-    directions = normalize(P - camera.position)
+    for i in range(image_height):
+        for j in range(image_width):
+            P[i, j] = P_center + R * (j - image_width / 2) * camera.right_vector - R * (i - image_height / 2) * camera.up_vector
 
-    ray_origins = np.full((image_height, image_width), camera.position)
-    ray_grid[:, :] = np.vectorize(Ray)(ray_origins, directions)
+    # Calculate the direction of each ray:
+    directions = np.zeros((image_height, image_width, 3))
+    directions[:, :] = P - camera.position
+    directions /= np.linalg.norm(directions, axis=-1)[..., None]
+
+    ray_origins = np.full((image_height, image_width, 3), camera.position)
+
+    ray_grid = np.array([[Ray(ray_origins[i, j], directions[i, j]) for j in range(image_width)] for i in range(image_height)])
 
     return ray_grid
-
-def find_nearest_intersection(ray_grid: ndarray, scene_objects):
-    intersections = np.empty_like(ray_grid, dtype=np.object)
-    object_hits = np.empty_like(ray_grid, dtype=np.object)
-    t_min = np.full(ray_grid.shape, float('inf'))
-
-    for obj in scene_objects:
-        hit_points = obj.intersect(ray_grid)
-        valid_hits = hit_points != None
-        t_values = np.linalg.norm(hit_points - ray_grid.origin[..., None, None], axis=-1)
-
-        update_mask = np.logical_and(valid_hits, t_values < t_min)
-        t_min[update_mask] = t_values[update_mask]
-        intersections[update_mask] = hit_points[update_mask]
-        object_hits[update_mask] = obj
-
-    return intersections, object_hits
 
 def refract(incident_direction, surface_normal, refractive_index_ratio):
     cos_theta_i = -np.dot(incident_direction, surface_normal)
@@ -181,15 +183,52 @@ def construct_next_ray_grid(curr_ray_array: ndarray, intersections: ndarray, obj
     return new_ray_array
 
 
+def find_nearest_intersection(ray: Ray, objects: list):
+    min_t = float('inf')
+    
+    for obj in objects:
+        t = obj.intersect(ray)
 
+        if t is None:
+            continue
 
-def ray_trace(ray_array: ndarray, objects: list, material_list: list, light_list: list, scene_settings: SceneSettings):
+        # distance = np.linalg.norm(intersection - ray.origin)
+
+        if EPSILON <= t < min_t:
+            min_t = t
+            ray.intersecting_point = ray.origin + t * ray.direction
+            ray.intersected_object = obj
+
+def get_ray_color(ray: Ray, objects: list, materials: list, lights: list, scene_settings: SceneSettings):
+    if ray.intersected_object is None:
+        ray.color = scene_settings.background_color
+        return
+    
+    material = materials[ray.intersected_object.material_index - 1]
+    ray.color = material.diffuse_color
+
+def ray_trace(ray_grid: ndarray, objects_list: list, material_list: list, light_list: list, scene_settings: SceneSettings):
     BG_COLOR = scene_settings.background_color
     MAX_SHADOW_RAYS = scene_settings.root_number_shadow_rays
     MAX_DEPTH = scene_settings.max_recursions
 
-    rays_stack = [ray_array]
-    intersections, object_hits = find_nearest_intersection(ray_array, objects)
+    count = 0
+    for ray in tqdm(ray_grid.flatten(), total=ray_grid.size, desc='Ray Tracing'):
+
+        if count == 250000//2 - 10:
+            print("hello")
+
+        find_nearest_intersection(ray, objects_list)
+        # if ray.intersected_object is not None:
+        #     print("hello")
+        get_ray_color(
+            ray=ray,
+            objects=objects_list,
+            materials=material_list,
+            lights=light_list,
+            scene_settings=scene_settings
+        )
+        count += 1
 
 def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
@@ -210,13 +249,15 @@ def main():
     object_list = [obj for obj in objects if not isinstance(obj, Light) and not isinstance(obj, Material)]
 
     # Construct the ray grid and reshape it to a 1D array
-    ray_grid_2d = construct_ray_grid(camera, args.width, args.height)
-    ray_array = ray_grid_2d.reshape(-1)
+    ray_grid = construct_ray_grid(camera, args.width, args.height)
 
-    ray_trace(ray_array, camera, object_list, material_list, light_list, scene_settings)
+    ray_trace(ray_grid, object_list, material_list, light_list, scene_settings)
+
+    # create a color matrix
+    color_matrix = np.array([[ray.color for ray in row] for row in ray_grid]) * 255
 
     # Save the output image
-    save_image(ray_grid_2d.color, args.output_image)
+    save_image(color_matrix, args.output_image)
 
 
 if __name__ == '__main__':

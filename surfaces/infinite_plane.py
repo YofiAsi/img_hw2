@@ -19,3 +19,6 @@ class InfinitePlane:
     def refract(self, ray, hit_point, refractive_index):
         # Infinite plane does not refract light, so return the same direction
         return ray.direction
+    
+    def calc_normal(self, point):
+        return self.normal

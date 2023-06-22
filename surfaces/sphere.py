@@ -25,17 +25,19 @@ class Sphere:
         return t
 
     def reflect(self, ray, hit_point):
-        normal = self.calculate_normal(hit_point)
+        normal = self.calc_normal(hit_point)
         reflected_direction = ray.direction - 2 * np.dot(ray.direction, normal) * normal
         return reflected_direction
 
     def refract(self, ray, hit_point, refractive_index=1.5):
-        normal = self.calculate_normal(hit_point)
+        normal = self.calc_normal(hit_point)
         cos_theta1 = np.dot(-ray.direction, normal)
         cos_theta2 = np.sqrt(1 - (refractive_index**2) * (1 - cos_theta1**2))
 
         refracted_direction = refractive_index * ray.direction + (refractive_index * cos_theta1 - cos_theta2) * normal
         return refracted_direction
 
-    def calculate_normal(self, point):
-        return (point - self.position) / self.radius
+    def calc_normal(self, point):
+        normal = point - self.position
+        normal = normal / np.linalg.norm(normal)
+        return normal

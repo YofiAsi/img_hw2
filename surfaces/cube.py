@@ -18,10 +18,9 @@ class Cube:
 
         if t_max >= max(0, t_min):
             t = max(0, t_min)
-            hit_point = ray.origin + t * ray.direction
-            return hit_point
+            return t
 
-        return -1
+        return float('-inf')
 
     def reflect(self, ray, hit_point):
         normal = self.calculate_normal(hit_point)
@@ -32,7 +31,7 @@ class Cube:
         # Cube does not refract light, so return the same direction
         return ray.direction
 
-    def calculate_normal(self, point):
+    def calc_normal(self, point):
         normal = np.zeros(3)
         for i in range(3):
             if abs(point[i] - self.position[i] - self.scale[i]) < 1e-6:

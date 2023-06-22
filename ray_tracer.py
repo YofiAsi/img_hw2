@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+from random import random
 from numpy import ndarray
 from numpy.linalg import norm
 from PIL import Image
@@ -11,8 +12,10 @@ from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
 from tqdm import tqdm
+from pathlib import Path
 
-EPSILON = 1e-6
+EPSILON = 1e-9
+
 
 def parse_scene_file(file_path):
     objects = []
@@ -49,51 +52,96 @@ def parse_scene_file(file_path):
                 raise ValueError("Unknown object type: {}".format(obj_type))
     return camera, scene_settings, objects
 
+
 def save_image(image_array, file_path):
     image = Image.fromarray(np.uint8(image_array))
+
+    p = Path(file_path)
+    
+    # add +1 to the file name until it does not exist
+    i = 1
+    while p.exists():
+        p = Path(file_path[:-4] + str(i) + file_path[-4:])
+        i += 1
     
     # Save the image to a file
-    image.save(file_path)
+    image.save(p.as_posix())
+
 
 class Ray:
-    def __init__(self, origin: ndarray, direction: ndarray, origin_object=None, relfective_depth=0):
+    def __init__(self, origin: ndarray, direction: ndarray, relfective_depth=0):
         assert len(origin) == 3 and len(direction) == 3
         self.origin = origin
         self.direction = direction
-        self.color = np.array([0, 0, 0])
-        self.transparency_ray:  Ray = None
-        self.reflection_ray:    Ray = None
-        self.intersected_object = None
-        self.intersecting_point = None
-        self.reflective_depth = 0
+        self.reflective_depth = relfective_depth
 
-class Vector:
-    def __init__(self, direction):
-        """
-        create a normalized vector
-        """
-        magnitude = np.linalg.norm(direction)
-        if (direction == 0).all():
-            self.direction = direction
-        else:
-            self.direction = direction / magnitude
 
-    def get_perpendicular_vector(self):
-        vector = np.cross(self.direction, np.array([1, 0, 0]))
-        if (vector == 0).all():
-            vector = np.cross(self.direction, np.array([0, 1, 0]))
-        vector /= np.linalg.norm(vector)
-        return vector
+class Scene:
+    def __init__(self, scene_settings: SceneSettings, objects: list, camera: Camera):
+        self.bg_color = np.array(scene_settings.background_color)
+        self.n_shadow_rays = scene_settings.root_number_shadow_rays
+        self.max_recursions = scene_settings.max_recursions
+        
+        self.materials = [None] + [obj for obj in objects if isinstance(obj, Material)]
+        self.lights = [obj for obj in objects if isinstance(obj, Light)]
+        self.objects = [obj for obj in objects if not isinstance(obj, Light) and not isinstance(obj, Material)]
+        
+        self.camera_position = camera.position
+
+
+def calculate_perpendicular_vector(vector):
+    if np.allclose(vector, [0, 0, 0]):
+        raise ValueError("Zero vector does not have a unique perpendicular vector.")
+
+    if np.allclose(vector[:2], [0, 0]):
+        # Vector lies along the z-axis, return a perpendicular vector lying in the x-y plane
+        return np.array([1, 0, 0]) if vector[2] != 0 else np.array([0, 1, 0])
+
+    # Generate two non-parallel vectors by changing the first component
+    v1 = np.array([-vector[1], vector[0], 0])
+    v2 = np.array([-vector[2], 0, vector[0]])
+
+    # Choose the shorter vector as the perpendicular vector
+    if np.linalg.norm(v1) < np.linalg.norm(v2):
+        return v1 / np.linalg.norm(v1)
+    else:
+        return v2 / np.linalg.norm(v2)
+
+
+def find_nearest_intersection(ray: Ray, objects: list):
+    min_t = float('inf')
+    intersected_object = None
+
+    for obj in objects:
+        t = obj.intersect(ray)
+
+        if t is None:
+            continue
+
+        if EPSILON <= t < min_t:
+            min_t = t
+            intersected_object = obj
     
+    return min_t, intersected_object
+
+
+def normalize(vector):
+    magnitude = np.linalg.norm(vector)
+    if magnitude <= EPSILON:
+        return vector
+    return vector / magnitude  
+    
+
 def set_camera_orientation(camera: Camera):
     P_0 = camera.position
-    towards_vector = Vector(np.array(camera.look_at) - np.array(P_0))
-    right_vector = Vector(np.cross(towards_vector.direction, camera.up_vector))
-    up_vector = Vector(np.cross(right_vector.direction, towards_vector.direction))
+    towards_vector = normalize(np.array(camera.look_at) - np.array(P_0))
+    right_vector = normalize(np.cross(towards_vector, camera.up_vector))
+    up_vector = normalize(np.cross(right_vector, towards_vector))
 
-    camera.right_vector = right_vector.direction
-    camera.up_vector = up_vector.direction
-    camera.towards_vector = towards_vector.direction
+    camera.right_vector = right_vector
+    camera.up_vector = up_vector
+    camera.towards_vector = towards_vector
+
 
 def construct_ray_grid(camera: Camera, image_width: int, image_height: int):
     """
@@ -121,114 +169,144 @@ def construct_ray_grid(camera: Camera, image_width: int, image_height: int):
 
     return ray_grid
 
-def refract(incident_direction, surface_normal, refractive_index_ratio):
-    cos_theta_i = -np.dot(incident_direction, surface_normal)
-    sin2_theta_i = 1 - cos_theta_i**2
 
-    if sin2_theta_i > 1:
-        # Total internal reflection
-        return None
+def calc_light_intensity(scene: Scene, light: Light, intersection_point: ndarray, intersected_object):
+    N = int(scene.n_shadow_rays)
+    light_vector: ndarray = normalize(intersection_point - light.position)
 
-    cos_theta_t = np.sqrt(1 - refractive_index_ratio**2 * sin2_theta_i)
-    refracted_direction = refractive_index_ratio * incident_direction + (refractive_index_ratio * cos_theta_i - cos_theta_t) * surface_normal
+    # Create perpendicular plane x,y to ray
+    x = calculate_perpendicular_vector(light_vector)
+    y = normalize(np.cross(light_vector, x))
 
-    return refracted_direction
+    # Create rectangle
+    left_bottom_cell = light.position - (light.radius/2) * x - (light.radius/2) * y
 
+    # Normalize rectangle directions by cell size:
+    cell_length = light.radius / N
+    x *= cell_length
+    y *= cell_length
 
-def construct_next_ray_grid(curr_ray_array: ndarray, intersections: ndarray, object_hits: ndarray, material_list: list) -> ndarray:
-    new_rays = []  # List to store the new rays
+    # Cast ray from cell to point and see if intersect with our point first
+    intersect_counter = 0.
+    for i in range(N):
+        for j in range(N):
+            cell_pos = left_bottom_cell + (i + random()) * x + (j + random()) * y
+            ray_vector = normalize(intersection_point - cell_pos)
+            cell_light_ray = Ray(cell_pos, ray_vector)
+            cell_t, cell_obj = find_nearest_intersection(cell_light_ray, scene.objects)
 
-    # Filter valid rays based on intersections and object hits
-    valid_indices = np.logical_and(intersections != None, object_hits != None)
-    valid_rays = curr_ray_array[valid_indices]
+            # checks if cell intersects with our point first
+            
+            if cell_obj == intersected_object:
+                intersect_counter += 1.
 
-    valid_intersections = intersections[valid_indices]
-    valid_object_hits = object_hits[valid_indices]
-
-    # Extract object materials based on material index from valid object hits
-    object_materials = np.take(material_list, [obj_hit.material_index for obj_hit in valid_object_hits])
-
-    # Calculate reflection colors and filter reflection mask
-    reflection_colors = np.vectorize(lambda x: x.reflection_color)(object_materials)
-    reflection_mask = np.any(reflection_colors != [0, 0, 0], axis=1)
-
-    # Calculate reflection directions, origins, and create reflection rays
-    reflection_directions = np.array([obj_hit.reflect(ray.direction, intersection) for ray, obj_hit, intersection in zip(valid_rays, valid_object_hits, valid_intersections)])
-    reflection_origins = valid_intersections + reflection_directions * EPSILON
-    reflection_rays = Ray(reflection_origins, reflection_directions)
-    reflection_rays.color = reflection_colors.reshape(-1)
-    reflection_rays.origin_object = valid_object_hits
-    reflection_rays.reflective_depth = valid_rays.reflective_depth + 1
-
-    # Check transparency mask
-    transparency_mask = object_materials[:, 0] != 0
-
-    # Calculate transparency directions, origins, and create transparency rays
-    transparency_directions = np.array([refract(ray.direction, obj_hit.normal, obj_mat.refraction_index) for ray, obj_hit, obj_mat in zip(valid_rays, valid_object_hits, object_materials)])
-    transparency_origins = valid_intersections + transparency_directions * EPSILON
-    transparency_rays = Ray(transparency_origins, transparency_directions)
-    transparency_rays.color = valid_rays.color
-    transparency_rays.origin_object = valid_object_hits
-
-    # Extend new rays with valid reflection rays
-    if np.any(reflection_mask):
-        new_rays.extend(reflection_rays[reflection_mask])
-
-    # Extend new rays with valid transparency rays
-    if np.any(transparency_mask):
-        new_rays.extend(transparency_rays[transparency_mask])
-
-    new_ray_array = np.array(new_rays, dtype=np.object)  # Convert the list of new rays to an array
-
-    return new_ray_array
+            """if cell_intersect is not None:
+                cell_intersect = cell_light_ray.origin + cell_t * cell_light_ray.direction
+                if np.linalg.norm(cell_intersect - intersection_point) < EPSILON:
+                    intersect_counter += 1."""
+            
+    fraction = float(intersect_counter) / float(N * N)
+    return (1 - light.shadow_intensity) + (light.shadow_intensity * fraction)
 
 
-def find_nearest_intersection(ray: Ray, objects: list):
-    min_t = float('inf')
+def calc_diffuse_color(light: Light, light_intens, intersection_point: ndarray, normal: ndarray):
+    light_vector = normalize(light.position - intersection_point)
+    dot_product = np.dot(normal, light_vector)
+    if dot_product < 0:
+        return np.zeros(3, dtype=float)
+    diffuse = light.color * light_intens * dot_product
+    return diffuse
+
+
+def calc_specular_color(light: Light, camera_pos: ndarray, light_intens, intersection_point: ndarray, normal: ndarray, shininess: int):
+    L = intersection_point - light.position
+    L /= np.linalg.norm(L)
+    R = L - (2 * np.dot(L, normal) * normal)
+    R /= np.linalg.norm(R)
+    V = camera_pos - intersection_point
+    V /= np.linalg.norm(V)
+    dot_product = np.dot(R, V)
+    if dot_product < 0:
+        return np.zeros(3, dtype=float)
+    specular = light.color * light_intens * (dot_product ** shininess) * light.specular_intensity
+    return specular
+
+
+def calc_lighting(intersection_point: ndarray, intersected_object, material: Material, scene: Scene):
+    camera_pos = scene.camera_position
+    shininess = material.shininess
+    normal = normalize(intersected_object.calc_normal(intersection_point))
+    diffuse_color = np.zeros(3, dtype=float)
+    specular_color = np.zeros(3, dtype=float)
+
+    for light in scene.lights:
+        # Calculate the light intensity
+        light_intens = calc_light_intensity(scene, light, intersection_point, intersected_object)
+        # Compute light effect on diffuse color
+        diffuse_color += calc_diffuse_color(light, light_intens, intersection_point, normal)
+        # Compute light effect on specular color
+        specular_color += calc_specular_color(light, camera_pos, light_intens, intersection_point, normal, shininess)
+
+    return diffuse_color, specular_color
+
+
+def calc_ray_color(ray: Ray, scene: Scene):
+    # recurtion stop condition
+    if ray.reflective_depth >= scene.max_recursions:
+        return np.copy(scene.bg_color)
     
-    for obj in objects:
-        t = obj.intersect(ray)
+    # find the nearest intersection
+    t, intersected_object = find_nearest_intersection(ray, scene.objects)
 
-        if t is None:
-            continue
+    # if there is no intersection, return the background color
+    if intersected_object is None:
+        return np.copy(scene.bg_color)
 
-        # distance = np.linalg.norm(intersection - ray.origin)
+    # calculate the intersection point and get material properties
+    intersection_point: ndarray = ray.origin + t * ray.direction
+    material: Material = scene.materials[intersected_object.material_index]
+    specular: ndarray =  material.specular_color
+    diffuse: ndarray = material.diffuse_color
+    mat_reflection_color: ndarray = material.reflection_color
+    transparency: float = material.transparency
 
-        if EPSILON <= t < min_t:
-            min_t = t
-            ray.intersecting_point = ray.origin + t * ray.direction
-            ray.intersected_object = obj
-
-def get_ray_color(ray: Ray, objects: list, materials: list, lights: list, scene_settings: SceneSettings):
-    if ray.intersected_object is None:
-        ray.color = scene_settings.background_color
-        return
+    # calculate the reflection ray
+    reflection_ray_color = np.zeros(3)
+    if (mat_reflection_color != 0).any():
+        direction = intersected_object.reflect(ray, intersection_point)
+        origin = intersection_point + EPSILON * direction
+        reflection_ray = Ray(origin, direction, ray.reflective_depth + 1)
+        reflection_ray_color = calc_ray_color(reflection_ray, scene)
     
-    material = materials[ray.intersected_object.material_index - 1]
-    ray.color = material.diffuse_color
+    # calculate the refraction ray (transparency)
+    refraction_ray_color = np.zeros(3)
+    if transparency > 0:
+        origin, direction = intersected_object.refract(ray, intersection_point)
+        refraction_ray = Ray(origin, direction, 0)
+        refraction_ray_color = np.copy(calc_ray_color(refraction_ray, scene))
 
-def ray_trace(ray_grid: ndarray, objects_list: list, material_list: list, light_list: list, scene_settings: SceneSettings):
-    BG_COLOR = scene_settings.background_color
-    MAX_SHADOW_RAYS = scene_settings.root_number_shadow_rays
-    MAX_DEPTH = scene_settings.max_recursions
+    # calculate the diffuse and specular colors
+    diffuse_color, specular_color = calc_lighting(intersection_point, intersected_object, material , scene)
+    diffuse_color = np.copy(diffuse_color)
+    specular_color = np.copy(specular_color)
 
-    count = 0
-    for ray in tqdm(ray_grid.flatten(), total=ray_grid.size, desc='Ray Tracing'):
+    # combine the colors
+    diffuse_color *= diffuse
+    specular_color *= specular
+    reflection_ray_color *= mat_reflection_color
 
-        if count == 250000//2 - 10:
-            print("hello")
+    return refraction_ray_color * transparency + (diffuse_color + specular_color) * (1 - transparency) + reflection_ray_color
 
-        find_nearest_intersection(ray, objects_list)
-        # if ray.intersected_object is not None:
-        #     print("hello")
-        get_ray_color(
-            ray=ray,
-            objects=objects_list,
-            materials=material_list,
-            lights=light_list,
-            scene_settings=scene_settings
-        )
-        count += 1
+
+def ray_trace(ray_grid: ndarray, scene: Scene):
+    color_matrix = np.zeros((ray_grid.shape[0], ray_grid.shape[1], 3))
+
+    for i in tqdm(range(ray_grid.shape[0])):
+        for j in range(ray_grid.shape[1]):
+            color_matrix[i, j] = np.clip(calc_ray_color(ray_grid[i, j], scene) * 255, 0, 255)
+
+    return color_matrix
+
 
 def main():
     parser = argparse.ArgumentParser(description='Python Ray Tracer')
@@ -244,17 +322,14 @@ def main():
     # Get the camera orientation
     set_camera_orientation(camera)
 
-    material_list = [obj for obj in objects if isinstance(obj, Material)]
-    light_list = [obj for obj in objects if isinstance(obj, Light)]
-    object_list = [obj for obj in objects if not isinstance(obj, Light) and not isinstance(obj, Material)]
+    # Set up the scene
+    scene = Scene(scene_settings, objects, camera)
 
-    # Construct the ray grid and reshape it to a 1D array
+    # Construct the ray grid
     ray_grid = construct_ray_grid(camera, args.width, args.height)
 
-    ray_trace(ray_grid, object_list, material_list, light_list, scene_settings)
-
-    # create a color matrix
-    color_matrix = np.array([[ray.color for ray in row] for row in ray_grid]) * 255
+    # Trace the rays
+    color_matrix = ray_trace(ray_grid, scene)
 
     # Save the output image
     save_image(color_matrix, args.output_image)
@@ -262,3 +337,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

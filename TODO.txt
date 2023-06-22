@@ -1,0 +1,11 @@
+What is left to do:
+
+1. test what we have right now with cubes. we need to make sure that the intersect function of cubes works.
+
+2. test on more scenes
+
+3. Transparency:
+for it to work we need to rewrite refract to get the new ray that comes out if the object.
+Right now this is not what we have.
+
+4. BEFORE SENDING THE PROJECT WE NEED TO REMOVE TQDM FROM THE CODE

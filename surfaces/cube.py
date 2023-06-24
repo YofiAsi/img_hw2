@@ -57,9 +57,35 @@ class Cube:
         reflected_direction = ray.direction - 2 * np.dot(ray.direction, normal) * normal
         return reflected_direction
 
-    def refract(self, ray, hit_point, refractive_index):
-        # Cube does not refract light, so return the same direction
-        return ray.direction
+    def refract(self, ray, hit_point, refractive_index=1.5):
+            incident_direction = ray.direction
+            normal = np.array([0, 0, 1])  # Assuming the cube's normal is along the z-axis
+
+            # Calculate the dot product between the incident direction and the normal
+            dot_product = np.dot(incident_direction, normal)
+
+            if dot_product < 0:
+                # Ray is entering the cube
+                refractive_ratio = 1 / refractive_index
+                new_normal = normal
+            else:
+                # Ray is exiting the cube
+                refractive_ratio = refractive_index
+                new_normal = -normal
+
+            # Calculate the refracted direction using Snell's law
+            cos_theta_i = -dot_product
+            sin_theta_i = np.sqrt(max(0, 1 - cos_theta_i ** 2))
+            sin_theta_t = refractive_ratio * sin_theta_i
+
+            if sin_theta_t >= 1:
+                # Total internal reflection
+                refracted_direction = None
+            else:
+                cos_theta_t = np.sqrt(max(0, 1 - sin_theta_t ** 2))
+                refracted_direction = refractive_ratio * incident_direction + (refractive_ratio * cos_theta_i - cos_theta_t) * new_normal
+
+            return refracted_direction
 
     def calc_normal(self, point):
         con_center = self.scale / 2

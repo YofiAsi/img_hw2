@@ -1,5 +1,6 @@
 import numpy as np
-import ray_tracer
+
+EPSILON = 1e-9
 
 class Cube:
     def __init__(self, position, scale, material_index):
@@ -65,19 +66,19 @@ class Cube:
         normal = np.zeros(3)
 
         # intersection is on the upper x-parallel plane
-        if abs((point[0] - self.position[0]) - con_center) < ray_tracer.EPSILON:
+        if abs((point[0] - self.position[0]) - con_center) < EPSILON:
             normal[0] = 1
         # intersection is on the lower x-parallel plane
-        elif abs((self.position[0] - point[0]) - con_center) < ray_tracer.EPSILON:
+        elif abs((self.position[0] - point[0]) - con_center) < EPSILON:
             normal[0] = -1
         # intersection is on the upper y-parallel plane
-        elif abs((point[1] - self.position[1]) - con_center) < ray_tracer.EPSILON:
+        elif abs((point[1] - self.position[1]) - con_center) < EPSILON:
             normal[1] = 1
         # intersection is on the lower y-parallel plane
-        elif abs((self.position[1] - point[1]) - con_center) < ray_tracer.EPSILON:
+        elif abs((self.position[1] - point[1]) - con_center) < EPSILON:
             normal[1] = -1
         # intersection is on the upper z-parallel plane
-        elif abs((point[2] - self.position[2]) - con_center) < ray_tracer.EPSILON:
+        elif abs((point[2] - self.position[2]) - con_center) < EPSILON:
             normal[2] = 1
         # intersection is on the lower z-parallel plane
         else:

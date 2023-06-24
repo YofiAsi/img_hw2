@@ -11,7 +11,6 @@ from scene_settings import SceneSettings
 from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
-from pathlib import Path
 
 EPSILON = 1e-9
 

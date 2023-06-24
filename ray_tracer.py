@@ -90,12 +90,12 @@ class Scene:
 
 
 def calculate_perpendicular_vector(vector):
-    if np.allclose(vector, [0, 0, 0]):
+    if np.allclose(vector, [0., 0., 0.]):
         raise ValueError("Zero vector does not have a unique perpendicular vector.")
 
-    if np.allclose(vector[:2], [0, 0]):
+    if np.allclose(vector[:2], [0., 0.]):
         # Vector lies along the z-axis, return a perpendicular vector lying in the x-y plane
-        return np.array([1, 0, 0]) if vector[2] != 0 else np.array([0, 1, 0])
+        return np.array([1., 0., 0.]) if vector[2] != 0 else np.array([0., 1., 0.])
 
     # Generate two non-parallel vectors by changing the first component
     v1 = np.array([-vector[1], vector[0], 0])
@@ -107,6 +107,19 @@ def calculate_perpendicular_vector(vector):
     else:
         return v2 / np.linalg.norm(v2)
 
+def find_all_intersections(ray: Ray, objects: list):
+    intersections = []
+
+    for obj in objects:
+        t = obj.intersect(ray)
+
+        if EPSILON <= t:
+            intersections.append((t, obj))
+    
+    # sort the intersections by t
+    intersections.sort(key=lambda x: x[0])
+
+    return intersections
 
 def find_nearest_intersection(ray: Ray, objects: list):
     min_t = float('inf')
@@ -114,9 +127,6 @@ def find_nearest_intersection(ray: Ray, objects: list):
 
     for obj in objects:
         t = obj.intersect(ray)
-
-        if t is None:
-            continue
 
         if EPSILON <= t < min_t:
             min_t = t
@@ -193,20 +203,27 @@ def calc_light_intensity(scene: Scene, light: Light, intersection_point: ndarray
             cell_pos = left_bottom_cell + (i + random()) * x + (j + random()) * y
             ray_vector = normalize(intersection_point - cell_pos)
             cell_light_ray = Ray(cell_pos, ray_vector)
-            cell_t, cell_obj = find_nearest_intersection(cell_light_ray, scene.objects)
+            intersections = find_all_intersections(cell_light_ray, scene.objects)
+            # cell_t, cell_obj = find_nearest_intersection(cell_light_ray, scene.objects)
 
             # checks if cell intersects with our point first
-            
-            if cell_obj == intersected_object:
-                intersect_counter += 1.
+            transparency_val = 1.
 
-            """if cell_intersect is not None:
-                cell_intersect = cell_light_ray.origin + cell_t * cell_light_ray.direction
-                if np.linalg.norm(cell_intersect - intersection_point) < EPSILON:
-                    intersect_counter += 1."""
+            for t, obj in intersections:
+                if obj == intersected_object:
+                    intersect_counter += 1.
+                    break
+                if scene.materials[obj.material_index].transparency == 0:
+                    break
+                transparency_val *= scene.materials[obj.material_index].transparency
+                if transparency_val < EPSILON:
+                    break
+
+            # if cell_obj == intersected_object:
+            #     intersect_counter += 1.
             
     fraction = float(intersect_counter) / float(N * N)
-    return (1 - light.shadow_intensity) + (light.shadow_intensity * fraction)
+    return (1 - light.shadow_intensity) + (light.shadow_intensity * fraction * transparency_val)
 
 
 def calc_diffuse_color(light: Light, light_intens, intersection_point: ndarray, normal: ndarray):
@@ -219,12 +236,9 @@ def calc_diffuse_color(light: Light, light_intens, intersection_point: ndarray, 
 
 
 def calc_specular_color(light: Light, camera_pos: ndarray, light_intens, intersection_point: ndarray, normal: ndarray, shininess: int):
-    L = intersection_point - light.position
-    L /= np.linalg.norm(L)
-    R = L - (2 * np.dot(L, normal) * normal)
-    R /= np.linalg.norm(R)
-    V = camera_pos - intersection_point
-    V /= np.linalg.norm(V)
+    L = normalize(intersection_point - light.position)
+    R = normalize(L - (2 * np.dot(L, normal) * normal))
+    V = normalize(camera_pos - intersection_point)
     dot_product = np.dot(R, V)
     if dot_product < 0:
         return np.zeros(3, dtype=float)
@@ -282,6 +296,7 @@ def calc_ray_color(ray: Ray, scene: Scene):
     refraction_ray_color = np.zeros(3)
     if transparency > 0:
         origin, direction = intersected_object.refract(ray, intersection_point)
+        origin = intersection_point + EPSILON * direction
         refraction_ray = Ray(origin, direction, 0)
         refraction_ray_color = np.copy(calc_ray_color(refraction_ray, scene))
 

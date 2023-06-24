@@ -1,6 +1,8 @@
 import numpy as np
-
+from math import sqrt
 EPSILON = 1e-9
+
+swap = lambda a, b: (b, a) if a > b else (a, b)
 
 class Cube:
     def __init__(self, position, scale, material_index):
@@ -10,24 +12,43 @@ class Cube:
 
     def intersect(self, ray):
         con_center = self.scale / 2
-        min_pos = [p - con_center for p in self.position]
-        max_pos = [p + con_center for p in self.position]
+        
+        min_pos = self.position - np.array([con_center, con_center, con_center])
+        max_pos = self.position + np.array([con_center, con_center, con_center])
 
         # scale of x indicate the ray x position. x-min <= 1 and x-max >=1 => x of ray close to the box
-        x_min = (min_pos[0] - ray.origin[0]) / ray.direction[0]
-        x_max = (max_pos[0] - ray.origin[0]) / ray.direction[0]
+        if ray.direction[0] == 0:
+            if ray.origin[0] < min_pos[0] or ray.origin[0] > max_pos[0]:
+                return -1
+            x_min = float('inf') * (min_pos[0] - ray.origin[0])
+            x_max = float('inf') * (max_pos[0] - ray.origin[0])
+        else:
+            x_min = (min_pos[0] - ray.origin[0]) / ray.direction[0]
+            x_max = (max_pos[0] - ray.origin[0]) / ray.direction[0]
 
-        x_min, x_max = Cube.swap(x_min, x_max)
+        x_min, x_max = swap(x_min, x_max)
 
-        y_min = (min_pos[1] - ray.origin[1]) / ray.direction[1]
-        y_max = (max_pos[1] - ray.origin[1]) / ray.direction[1]
+        if ray.direction[1] == 0:
+            if ray.origin[1] < min_pos[1] or ray.origin[1] > max_pos[1]:
+                return -1
+            y_min = float('inf') * (min_pos[1] - ray.origin[1])
+            y_max = float('inf') * (max_pos[1] - ray.origin[1])
+        else:
+            y_min = (min_pos[1] - ray.origin[1]) / ray.direction[1]
+            y_max = (max_pos[1] - ray.origin[1]) / ray.direction[1]
 
-        y_min, y_max = Cube.swap(y_min, y_max)
+        y_min, y_max = swap(y_min, y_max)
 
-        z_min = (min_pos[2] - ray.origin[2]) / ray.direction[2]
-        z_max = (max_pos[2] - ray.origin[2]) / ray.direction[2]
+        if ray.direction[2] == 0:
+            if ray.origin[2] < min_pos[2] or ray.origin[2] > max_pos[2]:
+                return -1
+            z_min = float('inf') * (min_pos[2] - ray.origin[2])
+            z_max = float('inf') * (max_pos[2] - ray.origin[2])
+        else:
+            z_min = (min_pos[2] - ray.origin[2]) / ray.direction[2]
+            z_max = (max_pos[2] - ray.origin[2]) / ray.direction[2]
 
-        z_min, z_max = Cube.swap(z_min, z_max)
+        z_min, z_max = swap(z_min, z_max)
 
         # check if the ray out from the cube
         if x_min > y_max or y_min > x_max:
@@ -47,45 +68,27 @@ class Cube:
         
         return x_min
 
-    def swap(a, b):
-        if a > b:
-            return b, a
-        return a, b
-
     def reflect(self, ray, hit_point):
         normal = self.calc_normal(hit_point)
         reflected_direction = ray.direction - 2 * np.dot(ray.direction, normal) * normal
         return reflected_direction
 
-    def refract(self, ray, hit_point, refractive_index=1.5):
-            incident_direction = ray.direction
-            normal = np.array([0, 0, 1])  # Assuming the cube's normal is along the z-axis
+    def refract(self, ray, hit_point):
+        normal = self.calc_normal(hit_point)
+        incident_direction = ray.direction
+        refractive_index = 1.08
 
-            # Calculate the dot product between the incident direction and the normal
-            dot_product = np.dot(incident_direction, normal)
+        cos_i = -np.dot(normal, incident_direction)
+        sin_t_squared = refractive_index**2 * (1 - cos_i**2)
 
-            if dot_product < 0:
-                # Ray is entering the cube
-                refractive_ratio = 1 / refractive_index
-                new_normal = normal
-            else:
-                # Ray is exiting the cube
-                refractive_ratio = refractive_index
-                new_normal = -normal
-
-            # Calculate the refracted direction using Snell's law
-            cos_theta_i = -dot_product
-            sin_theta_i = np.sqrt(max(0, 1 - cos_theta_i ** 2))
-            sin_theta_t = refractive_ratio * sin_theta_i
-
-            if sin_theta_t >= 1:
-                # Total internal reflection
-                refracted_direction = None
-            else:
-                cos_theta_t = np.sqrt(max(0, 1 - sin_theta_t ** 2))
-                refracted_direction = refractive_ratio * incident_direction + (refractive_ratio * cos_theta_i - cos_theta_t) * new_normal
-
-            return refracted_direction
+        if sin_t_squared > 1.0:
+            # Total internal reflection, reflect the ray
+            reflected_direction = incident_direction - 2 * np.dot(incident_direction, normal) * normal
+            return hit_point, reflected_direction
+        else:
+            cos_t = sqrt(1 - sin_t_squared)
+            refracted_direction = refractive_index * incident_direction + (refractive_index * cos_i - cos_t) * normal
+            return hit_point, refracted_direction
 
     def calc_normal(self, point):
         con_center = self.scale / 2

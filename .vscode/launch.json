@@ -13,7 +13,7 @@
             "justMyCode": true,
             "args": [
                 "scenes\\pool.txt",
-                "output\\test.png",
+                "output\\pool.png",
                 "--width",
                 "500",
                 "--height",

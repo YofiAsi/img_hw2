@@ -11,7 +11,6 @@ from scene_settings import SceneSettings
 from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
-from tqdm import tqdm
 from pathlib import Path
 
 EPSILON = 1e-9
@@ -55,17 +54,9 @@ def parse_scene_file(file_path):
 
 def save_image(image_array, file_path):
     image = Image.fromarray(np.uint8(image_array))
-
-    p = Path(file_path)
-    
-    # add +1 to the file name until it does not exist
-    i = 1
-    while p.exists():
-        p = Path(file_path[:-4] + str(i) + file_path[-4:])
-        i += 1
     
     # Save the image to a file
-    image.save(p.as_posix())
+    image.save(file_path)
 
 
 class Ray:
@@ -134,14 +125,12 @@ def find_nearest_intersection(ray: Ray, objects: list):
     
     return min_t, intersected_object
 
-
 def normalize(vector):
     magnitude = np.linalg.norm(vector)
     if magnitude <= EPSILON:
         return vector
     return vector / magnitude  
     
-
 def set_camera_orientation(camera: Camera):
     P_0 = camera.position
     towards_vector = normalize(np.array(camera.look_at) - np.array(P_0))
@@ -151,7 +140,6 @@ def set_camera_orientation(camera: Camera):
     camera.right_vector = right_vector
     camera.up_vector = up_vector
     camera.towards_vector = towards_vector
-
 
 def construct_ray_grid(camera: Camera, image_width: int, image_height: int):
     """
@@ -178,7 +166,6 @@ def construct_ray_grid(camera: Camera, image_width: int, image_height: int):
     ray_grid = np.array([[Ray(ray_origins[i, j], directions[i, j]) for j in range(image_width)] for i in range(image_height)])
 
     return ray_grid
-
 
 def calc_light_intensity(scene: Scene, light: Light, intersection_point: ndarray, intersected_object):
     N = int(scene.n_shadow_rays)
@@ -225,7 +212,6 @@ def calc_light_intensity(scene: Scene, light: Light, intersection_point: ndarray
     fraction = float(intersect_counter) / float(N * N)
     return (1 - light.shadow_intensity) + (light.shadow_intensity * fraction * transparency_val)
 
-
 def calc_diffuse_color(light: Light, light_intens, intersection_point: ndarray, normal: ndarray):
     light_vector = normalize(light.position - intersection_point)
     dot_product = np.dot(normal, light_vector)
@@ -233,7 +219,6 @@ def calc_diffuse_color(light: Light, light_intens, intersection_point: ndarray, 
         return np.zeros(3, dtype=float)
     diffuse = light.color * light_intens * dot_product
     return diffuse
-
 
 def calc_specular_color(light: Light, camera_pos: ndarray, light_intens, intersection_point: ndarray, normal: ndarray, shininess: int):
     L = normalize(intersection_point - light.position)
@@ -244,7 +229,6 @@ def calc_specular_color(light: Light, camera_pos: ndarray, light_intens, interse
         return np.zeros(3, dtype=float)
     specular = light.color * light_intens * (dot_product ** shininess) * light.specular_intensity
     return specular
-
 
 def calc_lighting(intersection_point: ndarray, intersected_object, material: Material, scene: Scene):
     camera_pos = scene.camera_position
@@ -262,7 +246,6 @@ def calc_lighting(intersection_point: ndarray, intersected_object, material: Mat
         specular_color += calc_specular_color(light, camera_pos, light_intens, intersection_point, normal, shininess)
 
     return diffuse_color, specular_color
-
 
 def calc_ray_color(ray: Ray, scene: Scene):
     # recurtion stop condition
@@ -312,15 +295,15 @@ def calc_ray_color(ray: Ray, scene: Scene):
 
     return refraction_ray_color * transparency + (diffuse_color + specular_color) * (1 - transparency) + reflection_ray_color
 
-
 def ray_trace(ray_grid: ndarray, scene: Scene):
     color_matrix = np.zeros((ray_grid.shape[0], ray_grid.shape[1], 3))
 
-    for i in tqdm(range(ray_grid.shape[0])):
+    for i in range(ray_grid.shape[0]):
         for j in range(ray_grid.shape[1]):
             color_matrix[i, j] = np.clip(calc_ray_color(ray_grid[i, j], scene) * 255, 0, 255)
 
     return color_matrix
+
 
 
 def main():
@@ -349,7 +332,5 @@ def main():
     # Save the output image
     save_image(color_matrix, args.output_image)
 
-
 if __name__ == '__main__':
     main()
-
